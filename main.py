@@ -422,11 +422,11 @@ class AdvancedFDVBot:
                         await self.broadcast_new_trades(new_trades)
                 
                 # 1분 대기
-                await asyncio.sleep(60)
+                await asyncio.sleep(300)
                 
             except Exception as e:
                 logger.error(f"모니터링 중 오류: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(300)
         
         self.monitoring_active = False
         logger.info("모니터링 중단됨")
