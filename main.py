@@ -3,7 +3,8 @@ import logging
 import requests
 import os
 from datetime import datetime
-from telegram import Bot
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler
 from telegram.error import TelegramError
 import json
 
@@ -14,33 +15,95 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class GeckoTerminalFDVBot:
-    def __init__(self, telegram_token, chat_id):
+class SmartFDVBot:
+    def __init__(self, telegram_token):
         """
-        텔레그램 봇 초기화
-        
-        Args:
-            telegram_token (str): 텔레그램 봇 토큰
-            chat_id (str): 메시지를 보낼 채팅 ID
+        스마트 FDV 봇 - chat_id 자동 감지
         """
         self.bot = Bot(token=telegram_token)
-        self.chat_id = chat_id
+        self.app = Application.builder().token(telegram_token).build()
         self.pool_address = "0xe9c02ca07931f9670fa87217372b3c9aa5a8a934"
         self.network = "hyperevm"
         self.base_url = "https://api.geckoterminal.com/api/v2"
         self.previous_fdv = None
+        self.active_chats = set()  # 활성 채팅 ID들 저장
+        self.monitoring_active = False
         
+        # 핸들러 추가
+        self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("stop", self.stop_command))
+        self.app.add_handler(CommandHandler("status", self.status_command))
+        
+    async def start_command(self, update: Update, context):
+        """사용자가 /start 명령어를 보냈을 때"""
+        chat_id = update.effective_chat.id
+        user_name = update.effective_user.first_name or "사용자"
+        
+        # 활성 채팅 목록에 추가
+        self.active_chats.add(chat_id)
+        
+        message = f"""
+🎉 안녕하세요 {user_name}님!
+
+🤖 **FDV 모니터링 봇이 활성화되었습니다!**
+
+📊 **모니터링 정보:**
+🎯 풀: {self.pool_address}
+🌐 네트워크: {self.network}
+⏱️ 업데이트: 1분마다
+
+🔧 **사용 가능한 명령어:**
+• `/start` - 모니터링 시작
+• `/stop` - 모니터링 중단  
+• `/status` - 현재 상태 확인
+
+💡 이제 1분마다 FDV 업데이트를 받으실 수 있습니다!
+        """
+        
+        await update.message.reply_text(message)
+        logger.info(f"새로운 사용자 등록: {chat_id} ({user_name})")
+        
+        # 모니터링이 아직 시작되지 않았다면 시작
+        if not self.monitoring_active:
+            asyncio.create_task(self.start_monitoring())
+    
+    async def stop_command(self, update: Update, context):
+        """사용자가 /stop 명령어를 보냈을 때"""
+        chat_id = update.effective_chat.id
+        
+        if chat_id in self.active_chats:
+            self.active_chats.remove(chat_id)
+            await update.message.reply_text(
+                "🛑 **모니터링이 중단되었습니다.**\n\n"
+                "다시 시작하려면 `/start` 명령어를 사용하세요."
+            )
+            logger.info(f"사용자 모니터링 중단: {chat_id}")
+        else:
+            await update.message.reply_text("❌ 현재 모니터링 중이 아닙니다.")
+    
+    async def status_command(self, update: Update, context):
+        """현재 상태 확인"""
+        chat_id = update.effective_chat.id
+        is_active = chat_id in self.active_chats
+        
+        status_message = f"""
+📊 **FDV 봇 상태**
+
+🎯 **풀 주소:** `{self.pool_address}`
+🌐 **네트워크:** {self.network}
+👥 **활성 사용자:** {len(self.active_chats)}명
+🔄 **모니터링 상태:** {"✅ 활성" if is_active else "❌ 비활성"}
+💰 **마지막 FDV:** {self.format_fdv_value(str(self.previous_fdv)) if self.previous_fdv else "아직 없음"}
+
+⏱️ **다음 업데이트:** 1분 이내
+        """
+        
+        await update.message.reply_text(status_message, parse_mode='Markdown')
+    
     async def get_pool_data(self):
-        """
-        GeckoTerminal API에서 풀 데이터 가져오기
-        
-        Returns:
-            dict: 풀 데이터 또는 None (실패시)
-        """
+        """GeckoTerminal API에서 풀 데이터 가져오기"""
         try:
             url = f"{self.base_url}/networks/{self.network}/pools/{self.pool_address}"
-            
-            # API 요청 헤더
             headers = {
                 'accept': 'application/json',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -48,98 +111,51 @@ class GeckoTerminalFDVBot:
             
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
+            return response.json()
             
-            data = response.json()
-            return data
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API 요청 실패: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 파싱 실패: {e}")
-            return None
         except Exception as e:
-            logger.error(f"예상치 못한 오류: {e}")
+            logger.error(f"API 요청 실패: {e}")
             return None
     
     def format_fdv_value(self, fdv_str):
-        """
-        FDV 값을 읽기 좋은 형태로 포맷팅
-        
-        Args:
-            fdv_str (str): FDV 값 문자열
-            
-        Returns:
-            str: 포맷팅된 FDV 값
-        """
+        """FDV 값 포맷팅"""
         try:
             fdv_float = float(fdv_str)
-            
-            if fdv_float >= 1_000_000_000:  # 10억 이상
+            if fdv_float >= 1_000_000_000:
                 return f"${fdv_float/1_000_000_000:.2f}B"
-            elif fdv_float >= 1_000_000:    # 100만 이상
+            elif fdv_float >= 1_000_000:
                 return f"${fdv_float/1_000_000:.2f}M"
-            elif fdv_float >= 1_000:        # 1천 이상
+            elif fdv_float >= 1_000:
                 return f"${fdv_float/1_000:.2f}K"
             else:
                 return f"${fdv_float:.2f}"
-                
-        except (ValueError, TypeError):
+        except:
             return fdv_str
     
     def calculate_change_percentage(self, current_fdv, previous_fdv):
-        """
-        FDV 변화율 계산
-        
-        Args:
-            current_fdv (float): 현재 FDV
-            previous_fdv (float): 이전 FDV
-            
-        Returns:
-            float: 변화율 (%)
-        """
+        """변화율 계산"""
         try:
             if previous_fdv and previous_fdv != 0:
-                change = ((current_fdv - previous_fdv) / previous_fdv) * 100
-                return change
+                return ((current_fdv - previous_fdv) / previous_fdv) * 100
             return 0.0
-        except (TypeError, ZeroDivisionError):
+        except:
             return 0.0
     
-    async def send_fdv_update(self, pool_data):
-        """
-        FDV 업데이트를 텔레그램으로 전송
+    async def broadcast_update(self, pool_data):
+        """모든 활성 채팅에 업데이트 전송"""
+        if not self.active_chats:
+            return
         
-        Args:
-            pool_data (dict): 풀 데이터
-        """
         try:
-            if not pool_data or 'data' not in pool_data:
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text="⚠️ 풀 데이터를 가져올 수 없습니다."
-                )
-                return
-            
             attributes = pool_data['data']['attributes']
-            
-            # FDV 값 추출
             fdv_usd = attributes.get('fdv_usd')
             pool_name = attributes.get('name', '알 수 없는 풀')
             base_token_price = attributes.get('base_token_price_usd', '0')
-            quote_token_price = attributes.get('quote_token_price_usd', '0')
             
             if not fdv_usd:
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text="⚠️ FDV 데이터를 찾을 수 없습니다."
-                )
                 return
             
-            # 현재 시간
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # FDV 포맷팅
             formatted_fdv = self.format_fdv_value(fdv_usd)
             current_fdv_float = float(fdv_usd)
             
@@ -163,126 +179,82 @@ class GeckoTerminalFDVBot:
                     change_emoji = "➡️"
                     change_text = " (0.00%)"
             
-            # 메시지 구성
             message = f"""
-🏊‍♂️ <b>풀 FDV 업데이트</b>
+🏊‍♂️ **풀 FDV 업데이트**
 
-🎯 <b>풀 이름:</b> {pool_name}
-🌐 <b>네트워크:</b> HyperEVM
-💰 <b>FDV:</b> {formatted_fdv}{change_text} {change_emoji}
+🎯 **풀:** {pool_name}
+🌐 **네트워크:** HyperEVM
+💰 **FDV:** {formatted_fdv}{change_text} {change_emoji}
 
-📊 <b>토큰 가격:</b>
-• Base Token: ${base_token_price}
-• Quote Token: ${quote_token_price}
+📊 **Base Token 가격:** ${base_token_price}
 
-🕐 <b>업데이트 시간:</b> {current_time}
-🔗 <b>풀 주소:</b> <code>{self.pool_address}</code>
+🕐 **업데이트:** {current_time}
             """.strip()
             
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode='HTML'
-            )
-            
-            # 이전 FDV 값 업데이트
-            self.previous_fdv = current_fdv_float
-            
-            logger.info(f"FDV 업데이트 전송 완료: {formatted_fdv}")
-            
-        except TelegramError as e:
-            logger.error(f"텔레그램 메시지 전송 실패: {e}")
-        except Exception as e:
-            logger.error(f"FDV 업데이트 전송 중 오류: {e}")
-    
-    async def start_monitoring(self):
-        """
-        FDV 모니터링 시작 (1분마다 실행)
-        """
-        logger.info("FDV 모니터링 시작...")
-        
-        # 시작 메시지 전송
-        try:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=f"🤖 <b>FDV 모니터링 봇이 시작되었습니다!</b>\n\n"
-                     f"🎯 풀 주소: <code>{self.pool_address}</code>\n"
-                     f"🌐 네트워크: {self.network}\n"
-                     f"⏱️ 업데이트 주기: 1분마다",
-                parse_mode='HTML'
-            )
-        except TelegramError as e:
-            logger.error(f"시작 메시지 전송 실패: {e}")
-        
-        while True:
-            try:
-                logger.info("풀 데이터 조회 중...")
-                pool_data = await self.get_pool_data()
-                
-                if pool_data:
-                    await self.send_fdv_update(pool_data)
-                else:
-                    await self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text="⚠️ 풀 데이터 조회 실패 - 다음 주기에 재시도합니다."
-                    )
-                
-                # 1분 대기
-                logger.info("60초 대기 중...")
-                await asyncio.sleep(60)
-                
-            except KeyboardInterrupt:
-                logger.info("사용자에 의해 모니터링이 중단되었습니다.")
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text="🛑 <b>FDV 모니터링이 중단되었습니다.</b>",
-                    parse_mode='HTML'
-                )
-                break
-            except Exception as e:
-                logger.error(f"모니터링 중 오류 발생: {e}")
+            # 모든 활성 채팅에 메시지 전송
+            failed_chats = []
+            for chat_id in self.active_chats.copy():
                 try:
                     await self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=f"⚠️ 모니터링 중 오류 발생: {str(e)}\n재시도 중..."
+                        chat_id=chat_id,
+                        text=message,
+                        parse_mode='Markdown'
                     )
-                except:
-                    pass
-                await asyncio.sleep(60)
-
-async def main():
-    """
-    메인 함수 - 봇 설정 및 실행
-    """
-    # Railway 환경변수에서 설정 값 불러오기
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    CHAT_ID = os.getenv("CHAT_ID")
+                except TelegramError as e:
+                    logger.error(f"메시지 전송 실패 (Chat {chat_id}): {e}")
+                    failed_chats.append(chat_id)
+            
+            # 실패한 채팅 제거
+            for chat_id in failed_chats:
+                self.active_chats.discard(chat_id)
+            
+            self.previous_fdv = current_fdv_float
+            logger.info(f"업데이트 전송 완료: {formatted_fdv} to {len(self.active_chats)} chats")
+            
+        except Exception as e:
+            logger.error(f"브로드캐스트 중 오류: {e}")
     
-    # 환경변수가 설정되지 않은 경우 오류 메시지
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("❌ 오류: 환경변수가 설정되지 않았습니다!")
-        print("\n📝 Railway에서 설정해야 할 환경변수:")
-        print("1. TELEGRAM_BOT_TOKEN: BotFather에서 생성한 봇 토큰")
-        print("2. CHAT_ID: 메시지를 받을 채팅 ID")
-        print("\n🔧 Railway 설정 방법:")
-        print("1. Railway 프로젝트 대시보드 접속")
-        print("2. Variables 탭 클릭")
-        print("3. 위 환경변수들 추가")
+    async def start_monitoring(self):
+        """FDV 모니터링 시작"""
+        if self.monitoring_active:
+            return
+        
+        self.monitoring_active = True
+        logger.info("FDV 모니터링 시작...")
+        
+        while self.monitoring_active and self.active_chats:
+            try:
+                pool_data = await self.get_pool_data()
+                if pool_data:
+                    await self.broadcast_update(pool_data)
+                
+                await asyncio.sleep(60)  # 1분 대기
+                
+            except Exception as e:
+                logger.error(f"모니터링 중 오류: {e}")
+                await asyncio.sleep(60)
+        
+        self.monitoring_active = False
+        logger.info("FDV 모니터링 중단됨")
+    
+    def run(self):
+        """봇 실행"""
+        logger.info("스마트 FDV 봇 시작...")
+        self.app.run_polling()
+
+def main():
+    """메인 함수"""
+    # Railway 환경변수에서 토큰 가져오기
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ 오류: TELEGRAM_BOT_TOKEN 환경변수가 설정되지 않았습니다!")
+        print("Railway Variables 탭에서 텔레그램 봇 토큰을 설정하세요.")
         return
     
-    # 봇 인스턴스 생성
-    bot = GeckoTerminalFDVBot(
-        telegram_token=TELEGRAM_BOT_TOKEN,
-        chat_id=CHAT_ID
-    )
-    
-    # 모니터링 시작
-    await bot.start_monitoring()
+    # 봇 실행
+    bot = SmartFDVBot(TELEGRAM_BOT_TOKEN)
+    bot.run()
 
 if __name__ == "__main__":
-    # Railway 환경에서는 자동으로 패키지가 설치되므로 import 체크 생략
-    print("🚀 FDV 텔레그램 봇을 시작합니다...")
-    print("🌐 Railway 환경에서 실행 중...")
-    
-    # 봇 실행
-    asyncio.run(main())
+    main()
