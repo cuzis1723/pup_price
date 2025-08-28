@@ -184,9 +184,9 @@ class AdvancedFDVBot:
                     change_text = " (0.00%)"
             
             message = f"""
+{formatted_fdv} **FDV 업데이트** {change_emoji}
 📊 **토큰 가격:** ${base_token_price}
 
-{formatted_fdv} **FDV 업데이트** {change_emoji}
 🎯 **풀:** {pool_name}
 🕐 **시간:** {current_time_kst} (KST)
 
