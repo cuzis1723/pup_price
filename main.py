@@ -2,7 +2,7 @@ import asyncio
 import logging
 import requests
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
