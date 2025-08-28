@@ -2,7 +2,7 @@ import asyncio
 import logging
 import requests
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
@@ -101,6 +101,17 @@ class AdvancedFDVBot:
         
         await update.message.reply_text(status_message, parse_mode='Markdown')
     
+    async def trades_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """최근 거래 내역 조회"""
+        await update.message.reply_text("📊 **최근 거래 내역을 조회 중...**")
+        
+        trades_data = await self.get_trades_data()
+        if trades_data:
+            message = self.format_trades_summary(trades_data)
+            await update.message.reply_text(message, parse_mode='Markdown')
+        else:
+            await update.message.reply_text("❌ 거래 내역을 가져올 수 없습니다.")
+    
     async def get_pool_data(self):
         """풀 데이터 가져오기"""
         try:
@@ -118,6 +129,23 @@ class AdvancedFDVBot:
             logger.error(f"풀 데이터 API 요청 실패: {e}")
             return None
     
+    async def get_trades_data(self):
+        """거래 내역 가져오기"""
+        try:
+            url = f"{self.base_url}/networks/{self.network}/pools/{self.pool_address}/trades"
+            headers = {
+                'accept': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"거래 데이터 API 요청 실패: {e}")
+            return None
+    
     def format_fdv_value(self, fdv_str):
         """FDV 값 포맷팅"""
         try:
@@ -133,6 +161,99 @@ class AdvancedFDVBot:
         except:
             return fdv_str
     
+    def calculate_change_percentage(self, current_fdv, previous_fdv):
+        """변화율 계산"""
+        try:
+            if previous_fdv and previous_fdv != 0:
+                return ((current_fdv - previous_fdv) / previous_fdv) * 100
+            return 0.0
+        except:
+            return 0.0
+    
+    def format_trade_value(self, value_str):
+        """거래 금액 포맷팅"""
+        try:
+            value_float = float(value_str)
+            if value_float >= 1_000_000:
+                return f"${value_float/1_000_000:.2f}M"
+            elif value_float >= 1_000:
+                return f"${value_float/1_000:.1f}K"
+            else:
+                return f"${value_float:.2f}"
+        except:
+            return value_str
+    
+    def get_new_trades(self, trades_data):
+        """새로운 거래만 필터링"""
+        if not trades_data or 'data' not in trades_data:
+            return []
+        
+        new_trades = []
+        current_time = datetime.now()
+        one_minute_ago = current_time - timedelta(minutes=1)
+        
+        for trade in trades_data['data']:
+            trade_id = trade['id']
+            trade_attrs = trade['attributes']
+            
+            # 거래 시간 파싱
+            try:
+                trade_time = datetime.fromisoformat(
+                    trade_attrs['block_timestamp'].replace('Z', '+00:00')
+                ).replace(tzinfo=None)
+                
+                # 1분 이내의 새로운 거래만
+                if trade_time >= one_minute_ago and trade_id not in self.previous_trades:
+                    new_trades.append(trade)
+                    self.previous_trades[trade_id] = trade_attrs
+                    
+            except Exception as e:
+                logger.error(f"거래 시간 파싱 오류: {e}")
+                continue
+        
+        # 오래된 거래는 메모리에서 제거 (메모리 관리)
+        if len(self.previous_trades) > 1000:
+            # 가장 오래된 500개 항목 제거
+            old_keys = list(self.previous_trades.keys())[:500]
+            for key in old_keys:
+                del self.previous_trades[key]
+        
+        return new_trades
+    
+    def format_trades_summary(self, trades_data, limit=10):
+        """거래 내역 요약 포맷팅"""
+        if not trades_data or 'data' not in trades_data:
+            return "❌ 거래 데이터를 찾을 수 없습니다."
+        
+        recent_trades = trades_data['data'][:limit]
+        
+        message = "📊 **최근 거래 내역 (최신 10개)**\n\n"
+        
+        for trade in recent_trades:
+            attrs = trade['attributes']
+            trade_type = attrs['kind']
+            volume_usd = attrs['volume_in_usd']
+            timestamp = attrs['block_timestamp']
+            
+            # 거래 타입에 따른 이모지
+            emoji = "🟢" if trade_type == "buy" else "🔴"
+            action = "매수" if trade_type == "buy" else "매도"
+            
+            # 시간 포맷팅
+            try:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                time_str = dt.strftime("%H:%M:%S")
+            except:
+                time_str = timestamp[:8]
+            
+            formatted_volume = self.format_trade_value(volume_usd)
+            
+            message += f"{emoji} **{action}** {formatted_volume} `{time_str}`\n"
+        
+        message += f"\n🔗 [GeckoTerminal에서 더 보기](https://www.geckoterminal.com/{self.network}/pools/{self.pool_address})"
+        
+        return message
+
     def get_kst_time(self):
         """KST(한국 표준시) 시간 반환"""
         kst = timezone(timedelta(hours=9))
@@ -155,11 +276,12 @@ class AdvancedFDVBot:
             fdv_usd = attributes.get('fdv_usd')
             pool_name = attributes.get('name', '알 수 없는 풀')
             base_token_price = attributes.get('base_token_price_usd', '0')
+            base_token_price = round(float(base_token_price),6)
             
             if not fdv_usd:
                 return
-            
             current_time_kst = self.get_kst_time().strftime("%m-%d %H:%M:%S")
+            current_time = datetime.now().strftime("%H:%M:%S")
             formatted_fdv = self.format_fdv_value(fdv_usd)
             current_fdv_float = float(fdv_usd)
             
@@ -184,11 +306,12 @@ class AdvancedFDVBot:
                     change_text = " (0.00%)"
             
             message = f"""
-{formatted_fdv} **FDV 업데이트** {change_emoji}
-📊 **토큰 가격:** ${base_token_price}
+💵 **FDV:** {formatted_fdv}{change_text}
+💰 **FDV 업데이트** {change_emoji}
 
 🎯 **풀:** {pool_name}
-🕐 **시간:** {current_time_kst} (KST)
+📊 **토큰 가격:** ${base_token_price}
+🕐 **시간:** {current_time_kst}
 
 🔗 [차트보기](https://upheaval.fi/swap)
             """.strip()
@@ -216,13 +339,88 @@ class AdvancedFDVBot:
         except Exception as e:
             logger.error(f"FDV 브로드캐스트 중 오류: {e}")
     
+    async def broadcast_new_trades(self, new_trades):
+        """새로운 거래 알림 브로드캐스트"""
+        if not self.active_chats or not new_trades:
+            return
+        
+        try:
+            # 거래량이 큰 순서로 정렬
+            sorted_trades = sorted(
+                new_trades,
+                key=lambda x: float(x['attributes']['volume_in_usd']),
+                reverse=True
+            )
+            
+            # 상위 5개 거래만 알림 (스팸 방지)
+            top_trades = sorted_trades[:5]
+            
+            for trade in top_trades:
+                attrs = trade['attributes']
+                trade_type = attrs['kind']
+                volume_usd = attrs['volume_in_usd']
+                timestamp = attrs['block_timestamp']
+                
+                # 거래량이 $100 이상인 것만 알림
+                if float(volume_usd) < 100:
+                    continue
+                
+                # 거래 타입에 따른 설정
+                if trade_type == "buy":
+                    emoji = "🟢"
+                    action = "대량 매수"
+                    color = "📈"
+                else:
+                    emoji = "🔴"
+                    action = "대량 매도"
+                    color = "📉"
+                
+                formatted_volume = self.format_trade_value(volume_usd)
+                
+                # 시간 포맷팅
+                try:
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    time_str = dt.strftime("%H:%M:%S")
+                except:
+                    time_str = "방금"
+                
+                message = f"""
+{emoji} **{action} 알림** {color}
+
+💰 **거래량:** {formatted_volume}
+🕐 **시간:** {time_str}
+🔗 **확인:** [GeckoTerminal](https://www.geckoterminal.com/{self.network}/pools/{self.pool_address})
+                """.strip()
+                
+                # 모든 활성 채팅에 전송
+                failed_chats = []
+                for chat_id in self.active_chats.copy():
+                    try:
+                        await self.bot.send_message(
+                            chat_id=chat_id,
+                            text=message,
+                            parse_mode='Markdown'
+                        )
+                    except TelegramError as e:
+                        logger.error(f"거래 알림 전송 실패 (Chat {chat_id}): {e}")
+                        failed_chats.append(chat_id)
+                
+                # 실패한 채팅 제거
+                for chat_id in failed_chats:
+                    self.active_chats.discard(chat_id)
+                
+                logger.info(f"거래 알림 전송: {action} {formatted_volume}")
+            
+        except Exception as e:
+            logger.error(f"거래 알림 브로드캐스트 중 오류: {e}")
+    
     async def start_monitoring(self):
         """모니터링 시작"""
         if self.monitoring_active:
             return
         
         self.monitoring_active = True
-        logger.info("FDV 모니터링 시작...")
+        logger.info("고급 FDV + 거래 모니터링 시작...")
         
         while self.monitoring_active and self.active_chats:
             try:
@@ -231,7 +429,14 @@ class AdvancedFDVBot:
                 if pool_data:
                     await self.broadcast_fdv_update(pool_data)
                 
-                # 5분 대기
+                # 거래 데이터 가져오기
+                trades_data = await self.get_trades_data()
+                if trades_data:
+                    new_trades = self.get_new_trades(trades_data)
+                    if new_trades:
+                        await self.broadcast_new_trades(new_trades)
+                
+                # 1분 대기
                 await asyncio.sleep(300)
                 
             except Exception as e:
@@ -243,7 +448,7 @@ class AdvancedFDVBot:
     
     def run(self):
         """봇 실행"""
-        logger.info("FDV 모니터링 봇 시작...")
+        logger.info("고급 FDV + 거래 모니터링 봇 시작...")
         self.app.run_polling()
 
 def main():
