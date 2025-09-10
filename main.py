@@ -283,6 +283,7 @@ class AdvancedFDVBot:
             current_time_kst = self.get_kst_time().strftime("%m-%d %H:%M:%S")
             current_time = datetime.now().strftime("%H:%M:%S")
             formatted_fdv = self.format_fdv_value(fdv_usd)
+            spot_percentage = str(round(formatted_fdv/75*100,1))+"%
             current_fdv_float = float(fdv_usd)
             
             # 변화율 계산
@@ -307,13 +308,15 @@ class AdvancedFDVBot:
             
             message = f"""
 💵 **FDV:** {formatted_fdv}{change_text}
+🏁 **SPOT 상장까지:** {spot_percentage}
 💰 **FDV 업데이트** {change_emoji}
 
 🎯 **풀:** {pool_name}
 📊 **토큰 가격:** ${base_token_price}
 🕐 **시간:** {current_time_kst}
 
-🔗 [차트보기](https://upheaval.fi/swap)
+🔗 [UPHEAVAL](https://upheaval.fi/portfolio?ref=BASEDONE) | [BASED](https://basedapp.io/r/HLHUB) | [X](https://x.com/pangji_nac) | [TG 공지방](https://t.me/hl_hub_noti)
+
             """.strip()
             
             # 모든 활성 채팅에 전송
