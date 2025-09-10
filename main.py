@@ -283,7 +283,7 @@ class AdvancedFDVBot:
             current_time_kst = self.get_kst_time().strftime("%m-%d %H:%M:%S")
             current_time = datetime.now().strftime("%H:%M:%S")
             formatted_fdv = self.format_fdv_value(fdv_usd)
-            spot_percentage = str(round(formatted_fdv/75*100,1))+"%"
+            spot_percentage = str(round(float(formatted_fdv)/75*100,1))+"%"
             current_fdv_float = float(fdv_usd)
             
             # 변화율 계산
