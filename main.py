@@ -357,7 +357,7 @@ class AdvancedFDVBot:
                 volume_usd = attrs['volume_in_usd']
                 timestamp = attrs['block_timestamp']
 
-                if float(volume_usd) < 100:
+                if float(volume_usd) < 10000:
                     continue
 
                 if trade_type == "buy":
