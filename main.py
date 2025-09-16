@@ -286,7 +286,7 @@ class AdvancedFDVBot:
             base_token_price = round(float(base_token_price), 6)
             current_time_kst = self.get_kst_time().strftime("%m-%d %H:%M:%S")
             formatted_fdv = self.format_fdv_value(fdv_usd)
-            spot_percentage = str(round(float(fdv_usd) / 1_000_000 / 75 * 100, 1)) + "%"
+            spot_percentage = str(round(float(fdv_usd) / 1_000_000 / 250 * 100, 1)) + "%"
             current_fdv_float = float(fdv_usd)
 
             # 변화율
@@ -307,7 +307,7 @@ class AdvancedFDVBot:
 
             message = f"""
 💵 **FDV:** {formatted_fdv}{change_text}
-🏁 **SPOT 상장까지:** {spot_percentage}
+🏁 **250M까지:** {spot_percentage}
 💰 **FDV 업데이트** {change_emoji}
 
 🎯 **풀:** {pool_name}
