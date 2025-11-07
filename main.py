@@ -57,12 +57,7 @@ class AdvancedFDVBot:
         user_name = user.first_name or "사용자"
 
         # 권한 체크
-        if self.ALLOWED_USER_IDS not in self.ALLOWED_USER_IDS:
-            await update.message.reply_text(
-                "⛔ 이 봇을 시작할 권한이 없습니다.\n관리자에게 허용 사용자 목록에 추가를 요청하세요."
-            )
-            logger.warning(f"/start 권한 거부: {user_id} ({user_name})")
-            return
+    
 
         self.active_chats.add(chat_id)
 
