@@ -26,7 +26,7 @@ class AdvancedFDVBot:
         self.pool_address = "0xe9c02ca07931f9670fa87217372b3c9aa5a8a934"
         self.network = "hyperevm"
         self.base_url = "https://api.geckoterminal.com/api/v2"
-        self.poll_interval_seconds = 60  # 모니터링 주기: 1분
+        self.poll_interval_seconds = 300  # 모니터링 주기: 1분
         # 봇 사용을 허용할 텔레그램 사용자 ID 목록 (정수형)
         # 본인/허용 사용자 ID를 여기에 추가하세요.
         self.ALLOWED_USER_IDS = {
@@ -57,7 +57,7 @@ class AdvancedFDVBot:
         user_name = user.first_name or "사용자"
 
         # 권한 체크
-        if self.ALLOWED_USER_IDS and user_id not in self.ALLOWED_USER_IDS:
+        if self.ALLOWED_USER_IDS not in self.ALLOWED_USER_IDS:
             await update.message.reply_text(
                 "⛔ 이 봇을 시작할 권한이 없습니다.\n관리자에게 허용 사용자 목록에 추가를 요청하세요."
             )
